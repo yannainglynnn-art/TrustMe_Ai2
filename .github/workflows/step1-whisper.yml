@@ -1,0 +1,45 @@
+name: "Step 1 - Whisper transcript test"
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Video URL (YouTube or direct link)"
+        required: true
+        type: string
+      language:
+        description: "Spoken language code (optional: en, ko, zh - blank = auto)"
+        required: false
+        type: string
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install -q yt-dlp requests
+
+      - name: Download video
+        run: |
+          mkdir -p work out
+          yt-dlp -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o work/input.mp4 "${{ inputs.video_url }}"
+
+      - name: Transcribe (Groq Whisper - time map)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python scripts/transcribe.py work/input.mp4 --language "${{ inputs.language }}" --outdir out
+
+      - name: Upload transcript
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript
+          path: out/
