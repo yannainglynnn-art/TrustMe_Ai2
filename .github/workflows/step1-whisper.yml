@@ -23,15 +23,32 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Install tools
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           pip install -q yt-dlp requests
 
+      - name: Write YouTube cookies (if secret exists)
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf '%s' "$YT_COOKIES" > cookies.txt
+            echo "Cookies file written ($(wc -l < cookies.txt) lines)"
+          else
+            echo "No YT_COOKIES secret - downloading without cookies"
+          fi
+
       - name: Download video
         run: |
           mkdir -p work out
-          yt-dlp -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o work/input.mp4 "${{ inputs.video_url }}"
+          COOKIE_ARG=""
+          if [ -f cookies.txt ]; then COOKIE_ARG="--cookies cookies.txt"; fi
+          yt-dlp $COOKIE_ARG -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o work/input.mp4 "${{ inputs.video_url }}"
 
       - name: Transcribe (Groq Whisper - time map)
         env:
