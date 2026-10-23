@@ -48,7 +48,7 @@ jobs:
           mkdir -p work out
           COOKIE_ARG=""
           if [ -f cookies.txt ]; then COOKIE_ARG="--cookies cookies.txt"; fi
-          yt-dlp $COOKIE_ARG -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o work/input.mp4 "${{ inputs.video_url }}"
+          yt-dlp $COOKIE_ARG --remote-components ejs:github -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o work/input.mp4 "${{ inputs.video_url }}"
 
       - name: Transcribe (Groq Whisper - time map)
         env:
