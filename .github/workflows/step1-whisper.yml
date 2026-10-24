@@ -1,36 +1,39 @@
-name: "Step 1 - Whisper transcript test"
+name: "Download relay - TrustMe production"
+
+# Relay for TrustMe Recap AI (HF Spaces backend): YouTube cuts TLS connections
+# from the Spaces' egress IP (SSL UNEXPECTED_EOF_WHILE_READING), so the backend
+# dispatches this workflow instead - GitHub's IPs are not cut and the recipe
+# below is the one proven in "Step 1 - Whisper transcript test" Run #3.
+# The downloaded mp4 is uploaded to the app's R2 bucket as relay/<job_id>.mp4;
+# the backend fetches it from R2 and deletes the relay object.
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Video URL (YouTube or direct link)"
+        description: "Video URL to download"
         required: true
         type: string
-      language:
-        description: "Spoken language code (optional: en, ko, zh - blank = auto)"
-        required: false
+      job_id:
+        description: "Relay job ID (R2 object key = relay/<job_id>.mp4)"
+        required: true
         type: string
 
 jobs:
-  transcribe:
+  relay:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
       - name: Install tools
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          pip install -q yt-dlp requests
+          pip install -q yt-dlp boto3
+          # ffmpeg is preinstalled on GitHub's ubuntu image - apt only as a
+          # fallback (skipping apt saves ~30-60s of relay delay per run)
+          if ! command -v ffmpeg >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg; fi
 
       - name: Write YouTube cookies (if secret exists)
         env:
@@ -38,25 +41,36 @@ jobs:
         run: |
           if [ -n "$YT_COOKIES" ]; then
             printf '%s' "$YT_COOKIES" > cookies.txt
-            echo "Cookies file written ($(wc -l < cookies.txt) lines)"
+            echo "Cookies file written"
           else
             echo "No YT_COOKIES secret - downloading without cookies"
           fi
 
-      - name: Download video
+      - name: Download video (proven recipe)
         run: |
-          mkdir -p work out
           COOKIE_ARG=""
           if [ -f cookies.txt ]; then COOKIE_ARG="--cookies cookies.txt"; fi
-          yt-dlp $COOKIE_ARG --remote-components ejs:github -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o work/input.mp4 "${{ inputs.video_url }}"
+          yt-dlp $COOKIE_ARG --remote-components ejs:github -f "bv*[height<=480]+ba/b[height<=480]/b" --merge-output-format mp4 -o input.mp4 "${{ inputs.video_url }}"
 
-      - name: Transcribe (Groq Whisper - time map)
+      - name: Upload to R2 relay key
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: python scripts/transcribe.py work/input.mp4 --language "${{ inputs.language }}" --outdir out
-
-      - name: Upload transcript
-        uses: actions/upload-artifact@v4
-        with:
-          name: transcript
-          path: out/
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, boto3
+          bucket = os.environ.get("R2_BUCKET_NAME") or "auto-recap-outputs"
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["R2_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["R2_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["R2_SECRET_KEY"],
+              region_name="auto",
+          )
+          key = "relay/" + os.environ["JOB_ID"] + ".mp4"
+          s3.upload_file("input.mp4", bucket, key)
+          print("Uploaded to R2:", bucket, key)
+          PYEOF
